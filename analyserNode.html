@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Analyser Node Test</title>
+</head>
+<body >
+
+
+
+	<div style="display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; flex-direction: column;">
+
+		<h1 id='clickPrompt' onclick="startAnalysis()"> Click To Start </h1>
+
+		<!--<p> Custom Audio URL </p>
+		<input type="text" id="newAudioSource" />
+		<button id="addAudioBtn" onclick="changeAudioSrc()"> Add Audio </button>-->
+
+		<button id='copyNotesBtn' onclick='copyNotesJSON()' style="display: none; font-size: 1.5rem;"> Copy Notes JSON </button>
+
+		<div id="notesList" style="display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; flex-direction: column;">
+
+		</div>
+
+	</div>
+
+
+</body>
+</html>
+<audio id="audioElement" src="https://media1.vocaroo.com/mp3/19aUtovNiGjz" crossorigin="anonymous"></audio>
+<script type="text/javascript">
+
+	var audioCtx;
+	var analyser;
+	var source;
+	var audio;
+	var loaded = false;
+	var audioElement;
+	var dataArray;
+	var noteStrings = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+	var c_chord_inv = 'https://voca.ro/11lWPW8suqz0'
+	var c_chord = 'https://voca.ro/148zI41FBzg7'
+	var c_g = 'https://voca.ro/15Rvn3EHfgWq'
+	var c = 'https://voca.ro/134BSkILUfiQ'
+	var chug = 'https://voca.ro/1ayDvWke6Vm3'
+	var c_scale = 'https://voca.ro/19aUtovNiGjz'
+
+	var tempo = 100;
+	var bars = 8;
+	
+	var skip_length;
+
+	let noteTimes;
+	var noteTimeDict = {};
+
+	var max_attempts = 256;
+	var attempts = 0;
+
+	var times_to_replay = 1;
+	var times_played = 0;
+	var notesHistogram = [];
+
+	const startAnalysis = () => {
+		test();
+
+		document.getElementById('clickPrompt').innerHTML = 'Loading Tome Domain Data - times to analyze at';
+
+		setTimeout(()=>{
+			test();
+			document.getElementById('clickPrompt').innerHTML = 'Analyzing Audio... Beep Boop';
+		},1000);
+	};
+
+	function load(){
+		console.log('loading');
+		audioElement = document.getElementById('audioElement');
+		audioCtx = new AudioContext();
+		analyser = audioCtx.createAnalyser();
+		source = audioCtx.createMediaElementSource(audioElement);
+		source.connect(analyser);
+		analyser.fftSize = 2048;
+		
+		analyser.connect(audioCtx.destination);
+	}
+
+	var isLoaded = false;
+	var isPlaying = false;
+	function test(){
+
+		if(!isLoaded){
+			isLoaded = true
+			skip_length = getSkipLength(tempo, bars, 100).toFixed(6);
+			// noteTimes = getTimesToAnalyzeMS(bars, tempo, 2);
+			// noteTimes = await getTimesToAnalyze(bars, tempo, 2)*1000;
+			getTimesToAnalyze(bars, tempo, 2)*1000;
+			load();
+			return
+		}
+
+		if(!isPlaying){
+			audioElement.play();
+			// source.start();
+			analyzeAudio();
+			isPlaying = true;
+			return;
+		}
+		return;
+		//var dataArray = new Float32Array(analyser.fftSize); 
+		//analyser.getFloatTimeDomainData(dataArray); 
+		//var ac = autoCorrelate( dataArray, audioCtx.sampleRate );
+		//console.log(ac, noteFromPitch(ac), noteStrings[noteFromPitch(ac)%12])
+		//console.log(audioElement.currentTime)
+	}
+
+	/*
+	while audio is playing
+		check if audio current time is in times to analyze
+			if yes, get note at current time and store
+	*/
+	function analyzeAudio(){
+
+		if(audioElement.currentTime > 0){
+			recusive_audio_analyzer();
+		}
+		else{
+			setTimeout(()=>{analyzeAudio()},0.001);
+		}
+
+	}
+
+	function recusive_audio_analyzer(){
+		var truncated_time = audioElement.currentTime.toFixed(2);
+		if(timeClose(truncated_time)){
+			dataArray = new Float32Array(analyser.fftSize);
+			analyser.getFloatTimeDomainData(dataArray); 
+			var ac = autoCorrelate( dataArray, audioCtx.sampleRate );
+			var note = noteStrings[noteFromPitch(ac)%12];
+			noteTimeDict[truncated_time] = note;
+			updateAnalysisHtml(note, truncated_time)
+			setTimeout(()=>{
+				recusive_audio_analyzer();
+				attempts++;
+			}, skip_length);
+		}
+		else if(audioElement.duration <= audioElement.currentTime || Object.keys(noteTimeDict).length == noteTimes.length || attempts == max_attempts){
+			document.getElementById('clickPrompt').innerHTML = 'Finished';
+			notesHistogram.push(noteTimeDict);
+			times_played++;
+			if(times_played != times_to_replay){
+				noteTimeDict = {};
+				audioElement.currentTime = 0;
+				audioElement.play();
+				analyzeAudio();
+				isPlaying = true;
+			}
+			else{
+				//getAveragePitches();
+				//done!
+				console.log(notesHistogram);
+				showNotesCopyBtn();
+			}
+		}
+		else{
+			setTimeout(()=>{
+				recusive_audio_analyzer();
+			}, skip_length/10);
+		}
+	}
+
+	function timeClose(time){
+		for(var i = 0; i < noteTimes.length; i++){
+			if(time == noteTimes[i].toFixed(2)){
+				return true;
+			}
+		}
+	}
+
+	const checkTime = ((time, currentTime)=>{
+		return time.toFixed(3) == currentTime;
+	});
+
+	function noteFromPitch( frequency ) {
+		var noteNum = 12 * (Math.log( frequency / 440 )/Math.log(2) );
+		return Math.round( noteNum ) + 69;
+	}
+
+	function frequencyFromNoteNumber( note ) {
+		return 440 * Math.pow(2,(note-69)/12);
+	}
+
+	function centsOffFromPitch( frequency, note ) {
+		return Math.floor( 1200 * Math.log( frequency / frequencyFromNoteNumber( note ))/Math.log(2) );
+	}
+
+	function autoCorrelate( buf, sampleRate ) {
+		// Implements the ACF2+ algorithm
+		var SIZE = buf.length;
+		var rms = 0;
+
+		for (var i=0;i<SIZE;i++) {
+			var val = buf[i];
+			rms += val*val;
+		}
+		rms = Math.sqrt(rms/SIZE);
+		if (rms<0.01) // not enough signal
+			return -1;
+
+		var r1=0, r2=SIZE-1, thres=0.2;
+		for (var i=0; i<SIZE/2; i++)
+			if (Math.abs(buf[i])<thres) { r1=i; break; }
+		for (var i=1; i<SIZE/2; i++)
+			if (Math.abs(buf[SIZE-i])<thres) { r2=SIZE-i; break; }
+
+		buf = buf.slice(r1,r2);
+		SIZE = buf.length;
+
+		var c = new Array(SIZE).fill(0);
+		for (var i=0; i<SIZE; i++)
+			for (var j=0; j<SIZE-i; j++)
+				c[i] = c[i] + buf[j]*buf[j+i];
+
+		var d=0; while (c[d]>c[d+1]) d++;
+		var maxval=-1, maxpos=-1;
+		for (var i=d; i<SIZE; i++) {
+			if (c[i] > maxval) {
+				maxval = c[i];
+				maxpos = i;
+			}
+		}
+		var T0 = maxpos;
+
+		var x1=c[T0-1], x2=c[T0], x3=c[T0+1];
+		a = (x1 + x3 - 2*x2)/2;
+		b = (x3 - x1)/2;
+		if (a) T0 = T0 - b/(2*a);
+
+		return sampleRate/T0;
+	}
+
+
+	function getTimesToAnalyze(bars, tempo, frequency){
+		//return new Promise((resolve)=>{
+			var beatLength = 60 / tempo;
+
+			beatLength /= frequency; // change from quarter notes to half ect
+
+			var noteCount = bars * 4 * frequency; //bars * 4 beats a bar * freq
+			var notesAdded = 0;
+			var noteTimesArr = [];
+
+			while(notesAdded < noteCount){
+				noteTimesArr.push(notesAdded * beatLength);
+				notesAdded++;
+				if(notesAdded == noteCount){
+					setTimeout(()=>{
+						noteTimes = noteTimesArr
+						//resolve(noteTimesArr);
+					},50)
+				}
+			}
+			
+		//});
+	}
+
+	async function getTimesToAnalyzeMS(bars, tempo, frequency){
+		var times = await getTimesToAnalyze(bars, tempo, frequency)*1000;
+		console.log(times)
+		return times;
+	}
+
+	function isPlaying(audio){
+		return (!audio.paused || audio.currentTime);
+	}
+
+	function getSkipLength(tempo, bars, sensitivity){
+		var beatLen = tempo / 60;
+		beat_coef = bars/4
+		beatLen = beatLen/beat_coef;
+		return beatLen/sensitivity;
+	}
+
+	function updateAnalysisHtml(note, time) {
+		if(note != undefined)
+			document.getElementById('notesList').innerHTML += "<p> Time:" + time + ", Note:"+note+" </p>";
+	}
+
+	function changeAudioSrc(){
+		var newSource = document.getElementById('newAudioSource').value;
+		document.getElementById('audioElement').src = newSource;
+		document.getElementById('audioElement').crossOrigin="anonymous";
+
+		document.getElementById('clickPrompt').innerHTML = 'Done';
+
+		setTimeout(()=>{
+			document.getElementById('clickPrompt').innerHTML = 'Click To Start';
+		},250);
+	}
+
+	function getAveragePitches(){
+
+		var pitchTimeCounts = {};
+
+		//loops of notes map with time, [note, count]
+		for(var index in notesHistogram){
+			var noteTimesArr = notesHistogram[index];
+			for(var jIndex in Object.keys(noteTimesArr)){
+				var noteTime = Object.keys(noteTimesArr)[jIndex];
+				var note = noteTimesArr[noteTime];
+				if(!pitchTimeCounts[noteTime])
+					pitchTimeCounts[noteTime] = [[note,1]];
+				else{
+					// look for given note in notes at given time
+					var foundNote = false;
+					for(var noteCountIndex in pitchTimeCounts[noteTime]){
+						if(pitchTimeCounts[noteTime][noteCountIndex][0] == note){ // found matching note at given time
+							pitchTimeCounts[noteTime][noteCountIndex][1] = pitchTimeCounts[noteTime][noteCountIndex][1] + 1;
+							foundNote = true;
+						}						
+					}
+					if(!foundNote){
+						pitchTimeCounts[noteTime].push([note,1]);
+					}
+				}
+			}
+		}
+
+		return getAvgFromPitchTimeCounts(pitchTimeCounts);
+
+	}
+
+	function getAvgFromPitchTimeCounts(pitchTimeCounts){
+		var avg_notes = {};
+		console.log(pitchTimeCounts);
+		return;
+		for(var index in Object.keys(pitchTimeCounts)){
+			var time = Object.keys(pitchTimeCounts)[index];
+			var notesArr = [];
+			console.log(pitchTimeCounts[time])
+			//for(var jIndex in pitchTimeCounts[time]){
+			//	console.log(pitchTimeCounts[time][jIndex])
+			//}
+		}
+	}
+
+	function showNotesCopyBtn(){
+		document.getElementById('copyNotesBtn').style.display = 'block';
+	}
+
+	function copyNotesJSON(){
+		var jsonNotes = JSON.stringify(notesHistogram);
+		console.log(jsonNotes)
+
+
+		navigator.permissions.query({name: "clipboard-write"}).then(result => {
+		  if (result.state == "granted" || result.state == "prompt") {
+		    /* write to the clipboard now */
+		    navigator.clipboard.writeText(jsonNotes);
+		  }
+		});
+
+	}
+
+</script>
